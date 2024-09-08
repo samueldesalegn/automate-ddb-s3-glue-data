@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  S3BucketForParquet:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: aws-customer-survey-analytics
+  GlueWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: DynamoDBtoS3Workflow
+  GlueDynamoDBtoS3Job:
+    Type: AWS::Glue::Job
+    Properties:
+      Role:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/glue-processor-role
+      Command:
+        Name: pythonshell
+        ScriptLocation: ..\..\glue-scripts\dynamodb-to-parquet.py
+        PythonVersion: '3.9'
+      MaxCapacity: 0.0625
+      DefaultArguments:
+        --TempDir: s3://aws-customer-survey-analytics/glue-temp/
+        --job-language: python
+        --enable-continuous-cloudwatch-log: 'true'
+    DependsOn: S3BucketForParquet
+  GlueTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Type: SCHEDULED
+      Schedule: cron(0 16 * * ? *)
+      WorkflowName:
+        Ref: GlueWorkflow
+      Actions:
+      - JobName:
+          Ref: GlueDynamoDBtoS3Job
+      StartOnCreation: true
+  GlueTable:
+    Type: AWS::Glue::Table
+    Properties:
+      DatabaseName: customerdb
+      CatalogId:
+        Ref: AWS::AccountId
+      TableInput:
+        Name: event_feedback_table
+        TableType: EXTERNAL_TABLE
+        StorageDescriptor:
+          Columns:
+          - Name: event_id
+            Type: string
+          - Name: event_date
+            Type: string
+          - Name: event_name
+            Type: string
+          - Name: event_rate
+            Type: double
+          - Name: why_this_rate
+            Type: string
+          - Name: presentation_content
+            Type: double
+          - Name: session_duration
+            Type: double
+          Location: s3://aws-customer-survey-analytics/events_parquet/
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+        Parameters:
+          classification: parquet
+          compressionType: none
+    DependsOn: S3BucketForParquet
+Outputs:
+  GlueJobName:
+    Description: Name of the Glue Job
+    Value:
+      Ref: GlueDynamoDBtoS3Job
+  GlueTableName:
+    Description: Name of the Glue Table
+    Value:
+      Ref: GlueTable
+  S3BucketName:
+    Description: Name of the S3 Bucket
+    Value:
+      Ref: S3BucketForParquet
